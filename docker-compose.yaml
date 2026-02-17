@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  claude-worker:
+    build: .
+    container_name: claude-task-runner
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    volumes:
+      # Persistent data (run log, recurring task tracker)
+      - /mnt/user/appdata/claude-task-runner/data:/data
+      # Config file (edit this to customise behaviour)
+      - /mnt/user/appdata/claude-task-runner/config.yaml:/app/config.yaml:ro
+      # Work directory for repos and worktrees (can be tmpfs for speed)
+      - /mnt/user/appdata/claude-task-runner/work:/work
+    # Optional: limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2.0'
+    #       memory: 4G

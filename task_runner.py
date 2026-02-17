@@ -1,0 +1,347 @@
+"""
+task_runner.py — Orchestrates the full lifecycle of a task through all personas.
+
+Flow: Triage → Design → Develop → Code Review → QA → Merge
+Each stage is owned by a persona. Communication happens via GitHub issue comments.
+"""
+
+import logging
+from typing import Optional
+from task_parser import Task, parse_issue
+from github_client import GitHubClient
+from worktree_manager import WorktreeManager
+from recurring import RecurringTracker
+from personas import (
+    ProductOwnerPersona,
+    ArchitectPersona,
+    DeveloperPersona,
+    QAPersona,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class TaskRunner:
+    """Runs a single task through its full lifecycle."""
+
+    def __init__(
+        self,
+        github: GitHubClient,
+        worktree_manager: WorktreeManager,
+        recurring: RecurringTracker,
+        config: dict,
+    ):
+        self.github = github
+        self.worktree = worktree_manager
+        self.recurring = recurring
+        self.config = config
+
+        # Initialize personas
+        self.product_owner = ProductOwnerPersona(github, config)
+        self.architect = ArchitectPersona(github, config, worktree_manager)
+        self.developer = DeveloperPersona(github, config, worktree_manager)
+        self.qa = QAPersona(github, config, worktree_manager)
+
+    def run(self, issue: dict) -> bool:
+        """
+        Run a task through its lifecycle.
+
+        This is the main entry point. It picks up wherever the task
+        currently is in the pipeline and drives it forward.
+
+        Args:
+            issue: Raw GitHub issue dict
+
+        Returns:
+            True if the task completed (done or failed), False if blocked
+        """
+        task = parse_issue(issue)
+        logger.info(
+            f"▶ Running task #{task.issue_number}: {task.title} "
+            f"(stage: {task.current_stage})"
+        )
+
+        # Swap from 'ready' to first stage
+        if task.current_stage == "triage" and "ready" in [
+            l["name"] for l in issue.get("labels", [])
+        ]:
+            self.github.remove_label(task.issue_number, "ready")
+            self.github.set_stage_label(task.issue_number, "triage")
+
+        worktree_path = None
+
+        try:
+            # Drive the task through stages
+            result = self._drive(task)
+
+            if result == "done":
+                logger.info(f"✅ Task #{task.issue_number} completed successfully")
+                # Record if recurring
+                if task.schedule != "once":
+                    self.recurring.record_run(task.issue_number, task.schedule)
+                return True
+
+            elif result == "blocked":
+                logger.info(f"⏸ Task #{task.issue_number} is blocked (awaiting human)")
+                return False
+
+            elif result == "failed":
+                logger.info(f"❌ Task #{task.issue_number} failed")
+                return True
+
+            else:
+                logger.warning(f"❓ Task #{task.issue_number} ended in unexpected state: {result}")
+                return False
+
+        except Exception as e:
+            logger.exception(f"💥 Unhandled error on task #{task.issue_number}")
+            try:
+                self.github.post_persona_comment(
+                    task.issue_number, "system",
+                    f"❌ **Unhandled Error**\n\n```\n{str(e)[:500]}\n```"
+                )
+                self.github.set_stage_label(task.issue_number, "failed")
+            except Exception:
+                pass
+            return True
+
+        finally:
+            # Always clean up worktrees
+            self.worktree.cleanup_all()
+
+    def _drive(self, task: Task) -> str:
+        """
+        Drive a task through its stages until it completes, blocks, or fails.
+
+        Returns:
+            One of: "done", "blocked", "failed"
+        """
+        max_iterations = 20  # Safety limit to prevent infinite loops
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(
+                f"  Stage: {task.current_stage} "
+                f"(iteration {iteration}/{max_iterations})"
+            )
+
+            if task.current_stage == "triage":
+                result = self._run_triage(task)
+
+            elif task.current_stage == "design":
+                result = self._run_design(task)
+
+            elif task.current_stage == "development":
+                result = self._run_development(task)
+
+            elif task.current_stage == "code-review":
+                result = self._run_code_review(task)
+
+            elif task.current_stage == "qa":
+                result = self._run_qa(task)
+
+            elif task.current_stage in ("done", "failed"):
+                return task.current_stage
+
+            elif task.current_stage == "awaiting-human":
+                return "blocked"
+
+            else:
+                logger.error(f"Unknown stage: {task.current_stage}")
+                return "failed"
+
+            # Check result
+            if result == "continue":
+                continue
+            elif result in ("done", "blocked", "failed"):
+                return result
+            else:
+                continue
+
+        logger.error(f"Task #{task.issue_number} hit max iterations ({max_iterations})")
+        self.github.post_persona_comment(
+            task.issue_number, "system",
+            f"⚠️ Task exceeded maximum iterations ({max_iterations}). "
+            "This may indicate an infinite loop. Marking as failed."
+        )
+        self.github.set_stage_label(task.issue_number, "failed")
+        return "failed"
+
+    # ─── Stage Handlers ─────────────────────────────────────────────────
+
+    def _run_triage(self, task: Task) -> str:
+        """Run the Product Owner triage stage."""
+        success = self.product_owner.execute(task)
+        if not success:
+            return "failed"
+        # Task's current_stage was updated by the persona
+        if task.current_stage == "awaiting-human":
+            return "blocked"
+        return "continue"
+
+    def _run_design(self, task: Task) -> str:
+        """Run the Architect design stage."""
+        # Set up the worktree for the architect to inspect the codebase
+        worktree_path = self._ensure_worktree(task)
+        if not worktree_path:
+            return "failed"
+
+        success = self.architect.execute_design(task, worktree_path)
+        if not success:
+            return "failed"
+        return "continue"
+
+    def _run_development(self, task: Task) -> str:
+        """Run the Developer implementation stage."""
+        worktree_path = self._ensure_worktree(task)
+        if not worktree_path:
+            return "failed"
+
+        is_revision = task.review_cycles > 0 or task.qa_cycles > 0
+        success = self.developer.execute(task, worktree_path, is_revision=is_revision)
+        if not success:
+            return "failed"
+
+        # Create or update the PR
+        if not task.pr_number:
+            pr_created = self._create_pr(task)
+            if not pr_created:
+                return "failed"
+
+        # Move to code review
+        self.github.set_stage_label(task.issue_number, "code-review")
+        task.current_stage = "code-review"
+        return "continue"
+
+    def _run_code_review(self, task: Task) -> str:
+        """Run the Architect code review stage."""
+        # Ensure we have the PR number
+        if not task.pr_number:
+            task.pr_number = self._find_pr_number(task)
+            if not task.pr_number:
+                self.github.post_persona_comment(
+                    task.issue_number, "system",
+                    "❌ Cannot find PR for code review."
+                )
+                self.github.set_stage_label(task.issue_number, "failed")
+                return "failed"
+
+        verdict = self.architect.execute_review(task)
+
+        if verdict == "approved":
+            return "continue"
+        elif verdict == "changes_required":
+            return "continue"  # Will loop back to development
+        elif verdict == "escalated":
+            return "blocked"
+        else:
+            return "failed"
+
+    def _run_qa(self, task: Task) -> str:
+        """Run the QA validation and merge stage."""
+        worktree_path = self._ensure_worktree(task)
+        if not worktree_path:
+            return "failed"
+
+        if not task.pr_number:
+            task.pr_number = self._find_pr_number(task)
+
+        verdict = self.qa.execute(task, worktree_path)
+
+        if verdict == "pass":
+            # Merge!
+            merged = self.qa.merge(task)
+            if merged:
+                return "done"
+            elif task.current_stage == "awaiting-human":
+                return "blocked"  # human_review required
+            else:
+                return "failed"
+        elif verdict == "fail":
+            return "continue"  # Will loop back to development
+        elif verdict == "escalated":
+            return "blocked"
+        else:
+            return "failed"
+
+    # ─── Helpers ─────────────────────────────────────────────────────────
+
+    def _ensure_worktree(self, task: Task) -> Optional[str]:
+        """Ensure a worktree exists for the task, creating repo if needed."""
+        try:
+            # Create new repo if needed
+            if task.new_repo:
+                existing = self.github._request(
+                    "GET", f"https://api.github.com/repos/{task.repo}"
+                )
+                if not existing:
+                    logger.info(f"Creating new repo: {task.repo}")
+                    self.github.create_repo(
+                        task.target_repo_name,
+                        description=task.repo_description,
+                        private=task.private,
+                    )
+
+            # Get the default branch
+            default_branch = self.github.get_default_branch(task.repo)
+
+            # Create worktree
+            worktree_path = self.worktree.create_worktree(
+                task.repo,
+                task.branch_name,
+                base_branch=default_branch,
+                issue_number=task.issue_number,
+            )
+            return worktree_path
+
+        except Exception as e:
+            logger.error(f"Failed to set up worktree: {e}")
+            self.github.post_persona_comment(
+                task.issue_number, "system",
+                f"❌ Failed to set up working environment:\n```\n{str(e)[:500]}\n```"
+            )
+            self.github.set_stage_label(task.issue_number, "failed")
+            return None
+
+    def _create_pr(self, task: Task) -> bool:
+        """Create a pull request for the task."""
+        default_branch = self.github.get_default_branch(task.repo)
+
+        pr_body = (
+            f"## Closes #{task.issue_number}\n\n"
+            f"**Task:** {task.title}\n\n"
+            f"This PR was generated by the Claude Task Runner.\n"
+            f"See the [issue]({task.issue_url}) for full context and discussion."
+        )
+
+        pr = self.github.create_pull_request(
+            repo=task.repo,
+            title=f"{task.title} (#{task.issue_number})",
+            body=pr_body,
+            head=task.branch_name,
+            base=default_branch,
+        )
+
+        if pr:
+            task.pr_number = pr["number"]
+            task.pr_url = pr["html_url"]
+            self.developer.comment(
+                task,
+                f"📬 **PR opened:** {task.pr_url}"
+            )
+            return True
+
+        logger.error(f"Failed to create PR for #{task.issue_number}")
+        return False
+
+    def _find_pr_number(self, task: Task) -> Optional[int]:
+        """Find an existing PR for this task's branch."""
+        url = f"https://api.github.com/repos/{task.repo}/pulls"
+        params = {"head": f"{task.target_owner}:{task.branch_name}", "state": "open"}
+        prs = self.github._request("GET", url, params=params)
+        if prs and len(prs) > 0:
+            pr = prs[0]
+            task.pr_url = pr["html_url"]
+            return pr["number"]
+        return None

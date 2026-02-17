@@ -1,0 +1,39 @@
+schedule:
+  # Night window for tasks tagged "night-only"
+  night_window_start: 2       # 2 AM
+  night_window_end: 8         # 8 AM
+  timezone: "Europe/London"
+
+# How often to check for new work (minutes)
+polling_interval_minutes: 5
+
+github:
+  # The repo where tasks (issues) are created
+  task_repo: "user/Claude-ToDo"
+  # GitHub PAT — set via environment variable
+  token: "${GITHUB_TOKEN}"
+  # Your GitHub username — used for @Human tagging
+  human_username: "your-github-username"
+
+claude:
+  # Default model for Claude CLI
+  default_model: "sonnet"
+  # Kill a Claude CLI session after this many minutes
+  timeout_minutes: 30
+  # Max conversation turns per Claude CLI invocation
+  max_turns: 50
+
+limits:
+  # Safety cap on daily task completions
+  max_tasks_per_day: 10
+  # Max architect ↔ developer review cycles before escalating to human
+  max_review_cycles: 3
+  # Max QA rejection cycles before escalating to human
+  max_qa_cycles: 2
+  # Remind human after N days of awaiting-human
+  stale_days: 7
+
+notifications:
+  enabled: false
+  # Slack/Discord/Pushover webhook URL
+  webhook_url: ""
