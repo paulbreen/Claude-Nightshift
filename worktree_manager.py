@@ -43,13 +43,23 @@ class WorktreeManager:
         clone_url = f"https://x-access-token:{self.github_token}@github.com/{repo}.git"
 
         if os.path.exists(repo_dir):
-            # Fetch latest
+            # Fetch latest (ignore errors for empty repos)
             logger.info(f"Fetching latest for {repo}")
-            self._run_git(["fetch", "--all", "--prune"], cwd=repo_dir)
+            try:
+                self._run_git(["fetch", "--all", "--prune"], cwd=repo_dir)
+            except subprocess.CalledProcessError:
+                logger.warning(f"Fetch failed for {repo} (may be empty), continuing")
         else:
             # Clone as bare repo (optimised for worktrees)
             logger.info(f"Cloning bare repo {repo}")
-            self._run_git(["clone", "--bare", clone_url, repo_dir])
+            try:
+                self._run_git(["clone", "--bare", clone_url, repo_dir])
+            except subprocess.CalledProcessError:
+                # Empty repo — init bare and add remote
+                logger.warning(f"Bare clone failed for {repo} (may be empty), initialising")
+                os.makedirs(repo_dir, exist_ok=True)
+                self._run_git(["init", "--bare"], cwd=repo_dir)
+                self._run_git(["remote", "add", "origin", clone_url], cwd=repo_dir)
 
         return repo_dir
 
@@ -77,15 +87,49 @@ class WorktreeManager:
         if os.path.exists(worktree_path):
             self.remove_worktree(repo, worktree_path)
 
-        # Fetch to ensure we have latest refs
-        self._run_git(["fetch", "--all"], cwd=repo_dir)
+        # Fetch to ensure we have latest refs (ignore errors for empty repos)
+        try:
+            self._run_git(["fetch", "--all"], cwd=repo_dir)
+        except subprocess.CalledProcessError:
+            logger.warning(f"Fetch failed (repo may be empty), continuing")
 
-        # Create worktree with new branch from base
-        origin_base = f"origin/{base_branch}"
-        self._run_git(
-            ["worktree", "add", "-b", branch_name, worktree_path, origin_base],
-            cwd=repo_dir,
-        )
+        # Check if the base branch exists (bare repos don't use origin/ prefix)
+        base_ref = None
+        for candidate in [f"origin/{base_branch}", base_branch]:
+            check = self._run_git(
+                ["rev-parse", "--verify", candidate],
+                cwd=repo_dir, capture=True,
+            )
+            if check:
+                base_ref = candidate
+                break
+
+        if base_ref:
+            # Check if branch already exists (e.g. from a previous stage)
+            branch_exists = self._run_git(
+                ["rev-parse", "--verify", branch_name],
+                cwd=repo_dir, capture=True,
+            )
+            if branch_exists:
+                # Reuse existing branch
+                self._run_git(
+                    ["worktree", "add", worktree_path, branch_name],
+                    cwd=repo_dir,
+                )
+            else:
+                # Create new branch from base
+                self._run_git(
+                    ["worktree", "add", "-b", branch_name, worktree_path, base_ref],
+                    cwd=repo_dir,
+                )
+        else:
+            # Empty repo: create a regular checkout and init an orphan branch
+            logger.info(f"Base branch {base_branch} not found, initialising empty worktree")
+            os.makedirs(worktree_path, exist_ok=True)
+            self._run_git(["init"], cwd=worktree_path)
+            clone_url = f"https://x-access-token:{self.github_token}@github.com/{repo}.git"
+            self._run_git(["remote", "add", "origin", clone_url], cwd=worktree_path)
+            self._run_git(["checkout", "--orphan", branch_name], cwd=worktree_path)
 
         # Set push URL with auth in the worktree
         clone_url = f"https://x-access-token:{self.github_token}@github.com/{repo}.git"
@@ -121,10 +165,18 @@ class WorktreeManager:
             cwd=worktree_path, capture=True,
         ).strip()
 
-        self._run_git(
-            ["push", "-u", "origin", branch],
-            cwd=worktree_path,
-        )
+        try:
+            self._run_git(
+                ["push", "-u", "origin", branch],
+                cwd=worktree_path,
+            )
+        except subprocess.CalledProcessError:
+            # Force push if normal push is rejected (e.g. orphan branch divergence)
+            logger.warning(f"Normal push failed for {branch}, force pushing")
+            self._run_git(
+                ["push", "--force-with-lease", "-u", "origin", branch],
+                cwd=worktree_path,
+            )
 
         logger.info(f"Pushed branch {branch}")
         return True

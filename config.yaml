@@ -9,7 +9,7 @@ polling_interval_minutes: 5
 
 github:
   # The repo where tasks (issues) are created
-  task_repo: "user/Claude-ToDo"
+  task_repo: "your-username/Claude-ToDo"
   # GitHub PAT — set via environment variable
   token: "${GITHUB_TOKEN}"
   # Your GitHub username — used for @Human tagging

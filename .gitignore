@@ -5,3 +5,4 @@ data/
 /work/
 *.log
 .DS_Store
+.claude/

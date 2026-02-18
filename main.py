@@ -187,11 +187,6 @@ def main():
         logger.error("GITHUB_TOKEN not set!")
         sys.exit(1)
 
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not anthropic_key:
-        logger.error("ANTHROPIC_API_KEY not set!")
-        sys.exit(1)
-
     # Initialize components
     github_config = config.get("github", {})
     github = GitHubClient(

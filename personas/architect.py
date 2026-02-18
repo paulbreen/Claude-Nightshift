@@ -124,7 +124,6 @@ Be thorough but pragmatic. Don't block on style nitpicks."""
                 task,
                 f"✅ **Code Review: Approved**\n\n{review_notes[:2000]}"
             )
-            self.transition(task, "qa")
             return "approved"
 
         elif "REVIEW_VERDICT: CHANGES_REQUIRED" in output:

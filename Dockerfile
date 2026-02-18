@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     curl \
     jq \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── Claude CLI ──────────────────────────────────────────────────────────
@@ -20,13 +21,17 @@ RUN pip install --break-system-packages -r requirements.txt
 
 COPY . .
 
-# ─── Git Config ──────────────────────────────────────────────────────────
-RUN git config --global user.name "Claude Worker" && \
-    git config --global user.email "claude-worker@noreply.github.com" && \
-    git config --global --add safe.directory "*"
+# ─── Non-root User ──────────────────────────────────────────────────────
+RUN useradd -m -s /bin/bash claude
 
 # ─── Directories ─────────────────────────────────────────────────────────
-RUN mkdir -p /data /work/repos /work/worktrees
+RUN mkdir -p /data /work/repos /work/worktrees && \
+    chown -R claude:claude /data /work /app
+
+# ─── Git Config (as claude user) ────────────────────────────────────────
+RUN gosu claude git config --global user.name "Claude Worker" && \
+    gosu claude git config --global user.email "claude-worker@noreply.github.com" && \
+    gosu claude git config --global --add safe.directory "*"
 
 # ─── Environment ─────────────────────────────────────────────────────────
 ENV DATA_DIR=/data
@@ -37,4 +42,6 @@ ENV PYTHONUNBUFFERED=1
 VOLUME ["/data"]
 
 # ─── Entrypoint ──────────────────────────────────────────────────────────
-CMD ["python3", "main.py"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

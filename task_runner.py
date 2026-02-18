@@ -1,7 +1,7 @@
 """
 task_runner.py — Orchestrates the full lifecycle of a task through all personas.
 
-Flow: Triage → Design → Develop → Code Review → QA → Merge
+Flow: Triage → Design → Develop → PR → Code Review → Tag Human
 Each stage is owned by a persona. Communication happens via GitHub issue comments.
 """
 
@@ -15,7 +15,6 @@ from personas import (
     ProductOwnerPersona,
     ArchitectPersona,
     DeveloperPersona,
-    QAPersona,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,6 @@ class TaskRunner:
         self.product_owner = ProductOwnerPersona(github, config)
         self.architect = ArchitectPersona(github, config, worktree_manager)
         self.developer = DeveloperPersona(github, config, worktree_manager)
-        self.qa = QAPersona(github, config, worktree_manager)
 
     def run(self, issue: dict) -> bool:
         """
@@ -138,9 +136,6 @@ class TaskRunner:
             elif task.current_stage == "code-review":
                 result = self._run_code_review(task)
 
-            elif task.current_stage == "qa":
-                result = self._run_qa(task)
-
             elif task.current_stage in ("done", "failed"):
                 return task.current_stage
 
@@ -230,35 +225,14 @@ class TaskRunner:
         verdict = self.architect.execute_review(task)
 
         if verdict == "approved":
-            return "continue"
-        elif verdict == "changes_required":
-            return "continue"  # Will loop back to development
-        elif verdict == "escalated":
+            # Tag the human for final review and merge
+            self.github.tag_human(
+                task.issue_number, "architect",
+                f"Code review passed. PR is ready for your review.\n\n"
+                f"**PR:** {task.pr_url or f'#{task.pr_number}'}",
+            )
             return "blocked"
-        else:
-            return "failed"
-
-    def _run_qa(self, task: Task) -> str:
-        """Run the QA validation and merge stage."""
-        worktree_path = self._ensure_worktree(task)
-        if not worktree_path:
-            return "failed"
-
-        if not task.pr_number:
-            task.pr_number = self._find_pr_number(task)
-
-        verdict = self.qa.execute(task, worktree_path)
-
-        if verdict == "pass":
-            # Merge!
-            merged = self.qa.merge(task)
-            if merged:
-                return "done"
-            elif task.current_stage == "awaiting-human":
-                return "blocked"  # human_review required
-            else:
-                return "failed"
-        elif verdict == "fail":
+        elif verdict == "changes_required":
             return "continue"  # Will loop back to development
         elif verdict == "escalated":
             return "blocked"

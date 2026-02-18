@@ -1,30 +1,28 @@
 # Claude Task Runner
 
-An autonomous AI agent that picks up tasks from GitHub Issues and drives them through a full software development lifecycle using Claude CLI — from triage to merge.
+An autonomous AI agent that picks up tasks from GitHub Issues and drives them through a full software development lifecycle using Claude CLI — from triage to PR review.
 
 Designed to run as a Docker container on **Unraid** (or any Docker host).
 
 ## How It Works
 
 ```
-You create a GitHub Issue → Claude picks it up → Triage → Design → Develop → Review → QA → Merge
+You create a GitHub Issue → Claude picks it up → Triage → Design → Develop → PR → Review → Tag Human
 ```
 
-The runner uses **four AI personas** that communicate via GitHub issue comments, creating a visible audit trail:
+The runner uses **three AI personas** that communicate via GitHub issue comments, creating a visible audit trail:
 
 | Persona | Role |
 |---|---|
 | 🎯 **Product Owner** | Triages issues, refines requirements, asks clarifying questions |
 | 🏗️ **Architect** | Designs implementation plans, performs code reviews |
 | 💻 **Developer** | Writes code using Claude CLI in YOLO mode |
-| 🧪 **QA** | Validates against acceptance criteria, runs tests, merges PRs |
 
 ## Quick Start
 
 ### 1. Prerequisites
 
 - A GitHub Personal Access Token with `repo` scope
-- An Anthropic API key
 - Docker (or Unraid)
 
 ### 2. Create the Task Repo
@@ -73,7 +71,6 @@ mkdir -p /mnt/user/appdata/claude-task-runner/work
 cp config.yaml /mnt/user/appdata/claude-task-runner/config.yaml
 
 # Set environment variables
-export ANTHROPIC_API_KEY="sk-ant-..."
 export GITHUB_TOKEN="ghp_..."
 
 # Run
@@ -84,7 +81,7 @@ docker-compose up -d
 
 1. Build the image or push to a registry
 2. Add a new container via the Unraid Docker UI
-3. Set environment variables: `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`
+3. Set environment variable: `GITHUB_TOKEN`
 4. Map volumes:
    - `/mnt/user/appdata/claude-task-runner/data` → `/data`
    - `/mnt/user/appdata/claude-task-runner/config.yaml` → `/app/config.yaml`
@@ -124,17 +121,16 @@ The runner will pick it up on its next poll cycle and drive it through the full 
 ## Task Lifecycle
 
 ```
-ready → triage → design → development → code-review → qa → done
-                              ↑              │          │
-                              └──────────────┘          │
-                              ↑                         │
-                              └─────────────────────────┘
+ready → triage → design → development → code-review → awaiting-human
+                              ↑              │
+                              └──────────────┘
 ```
 
-At any stage, work can be escalated to `awaiting-human` if:
+After code review passes, you are tagged on the issue for final review and merge.
+
+Work can also be escalated to `awaiting-human` earlier if:
 - Requirements are unclear
 - Code review has gone through too many cycles
-- QA keeps rejecting
 
 You'll be tagged on the issue (`@your-username`) when input is needed.
 
@@ -166,7 +162,6 @@ The runner manages these labels automatically:
 | `design` | Architect is creating a plan |
 | `development` | Developer is writing code |
 | `code-review` | Architect is reviewing the PR |
-| `qa` | QA is validating the work |
 | `awaiting-human` | Blocked — needs your input |
 | `done` | Completed and merged |
 | `failed` | Something went wrong |
@@ -177,7 +172,6 @@ The runner manages these labels automatically:
 
 - **Daily task cap** — configurable max tasks per day (default: 10)
 - **Review cycle cap** — escalates to human after N review rounds (default: 3)
-- **QA cycle cap** — escalates to human after N rejections (default: 2)
 - **Timeout** — kills Claude CLI if it runs too long (default: 30 min)
 - **Max iterations** — prevents infinite stage loops (hardcoded: 20)
 - **Graceful shutdown** — handles SIGTERM/SIGINT cleanly
@@ -203,8 +197,7 @@ claude-task-runner/
 │   ├── base.py          # Shared persona + Claude CLI logic
 │   ├── product_owner.py # Triage + requirements
 │   ├── architect.py     # Design + code review
-│   ├── developer.py     # Implementation
-│   └── qa.py            # Validation + merge
+│   └── developer.py     # Implementation
 ├── templates/
 │   ├── issue_template.md
 │   └── pr_template.md
