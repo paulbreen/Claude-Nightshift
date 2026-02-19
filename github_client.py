@@ -49,6 +49,21 @@ class GitHubClient:
             return []
         return [i for i in resp if "pull_request" not in i]
 
+    def get_awaiting_human_issues(self) -> list[dict]:
+        """Fetch all open issues with both 'claude' and 'awaiting-human' labels, oldest first."""
+        url = f"{GITHUB_API}/repos/{self.task_repo}/issues"
+        params = {
+            "labels": "claude,awaiting-human",
+            "state": "open",
+            "sort": "created",
+            "direction": "asc",
+            "per_page": 50,
+        }
+        resp = self._request("GET", url, params=params)
+        if resp is None:
+            return []
+        return [i for i in resp if "pull_request" not in i]
+
     def get_in_progress_issues(self) -> list[dict]:
         """Fetch issues currently being worked on (any active stage label)."""
         stages = ["triage", "design", "development", "code-review", "qa"]

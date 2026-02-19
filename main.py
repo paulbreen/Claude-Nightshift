@@ -229,6 +229,23 @@ def main():
                 _sleep(polling_interval)
                 continue
 
+            # Check for issues labelled 'claude' + 'awaiting-human'
+            awaiting = github.get_awaiting_human_issues()
+            if awaiting:
+                logger.info(f"Found {len(awaiting)} awaiting-human issue(s)")
+                runner = TaskRunner(github, worktree_manager, recurring_tracker, config)
+                for aw_issue in awaiting:
+                    issue_num = aw_issue["number"]
+                    comments = github.get_issue_comments(issue_num)
+                    if comments:
+                        latest = comments[-1]
+                        author = latest.get("user", {}).get("login", "")
+                        if author == github.human_username:
+                            logger.info(
+                                f"Human responded on #{issue_num}, processing..."
+                            )
+                            runner.handle_human_response(aw_issue)
+
             # Check for issues labelled 'claude' + 'ready'
             issues = github.get_ready_issues()
             logger.info(f"Found {len(issues)} ready task(s)")

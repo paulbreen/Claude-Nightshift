@@ -107,6 +107,68 @@ class TaskRunner:
             # Always clean up worktrees
             self.worktree.cleanup_all()
 
+    def handle_human_response(self, issue: dict):
+        """
+        Process a human's response on an awaiting-human issue.
+
+        Checks the latest comment for approve/changes keywords and acts accordingly:
+        - Approve: merge the PR, set label to 'done', close the issue.
+        - Changes: move back to 'development' stage for the pipeline to re-run.
+        """
+        task = parse_issue(issue)
+        issue_num = task.issue_number
+        logger.info(f"Handling human response on #{issue_num}")
+
+        comments = self.github.get_issue_comments(issue_num)
+        if not comments:
+            return
+
+        latest_body = comments[-1].get("body", "").lower().strip()
+
+        approve_keywords = ["approved", "approve", "lgtm", "merge", "looks good", "ship it"]
+        changes_keywords = ["changes", "fix", "update", "revise"]
+
+        is_approve = any(kw in latest_body for kw in approve_keywords)
+        is_changes = any(kw in latest_body for kw in changes_keywords)
+
+        if is_approve:
+            # Find and merge the PR
+            pr_number = task.pr_number or self._find_pr_number(task)
+            if pr_number:
+                merged = self.github.merge_pull_request(task.repo, pr_number)
+                if merged:
+                    self.github.post_persona_comment(
+                        issue_num, "system",
+                        f"✅ PR #{pr_number} merged. Closing issue."
+                    )
+                else:
+                    self.github.post_persona_comment(
+                        issue_num, "system",
+                        f"⚠️ Failed to merge PR #{pr_number}. Please merge manually."
+                    )
+            else:
+                self.github.post_persona_comment(
+                    issue_num, "system",
+                    "⚠️ Could not find a PR to merge."
+                )
+
+            self.github.set_stage_label(issue_num, "done")
+            self.github.close_issue(issue_num)
+            logger.info(f"✅ #{issue_num} approved — PR merged, issue closed")
+
+        elif is_changes:
+            self.github.set_stage_label(issue_num, "ready")
+            self.github.post_persona_comment(
+                issue_num, "system",
+                "🔄 Human requested changes. Moving back to **ready** for re-processing."
+            )
+            logger.info(f"🔄 #{issue_num} — changes requested, moved back to ready")
+
+        else:
+            logger.info(
+                f"#{issue_num} — human comment didn't match approve/changes keywords, skipping"
+            )
+
     def _drive(self, task: Task) -> str:
         """
         Drive a task through its stages until it completes, blocks, or fails.
