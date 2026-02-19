@@ -6,8 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "[$(date)] Pulling latest from git..."
+# Preserve user config across git reset
+[ -f config.yaml ] && cp config.yaml config.yaml.bak
 git fetch origin main
 git reset --hard origin/main
+[ -f config.yaml.bak ] && mv config.yaml.bak config.yaml
 
 # Ensure config.yaml exists (gitignored, user-specific)
 if [ ! -f config.yaml ]; then
