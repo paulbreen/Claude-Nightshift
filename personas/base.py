@@ -135,6 +135,7 @@ class BasePersona:
     def escalate_to_human(self, task: Task, reason: str):
         """Escalate to the human for input."""
         self.github.tag_human(task.issue_number, self.persona_name, reason)
+        task.current_stage = "awaiting-human"
 
     def transition(self, task: Task, new_stage: str):
         """Move a task to a new stage."""

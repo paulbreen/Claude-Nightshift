@@ -26,6 +26,9 @@ When producing your output:
 - Identify any risks or edge cases
 - Note any dependencies on other systems or tasks
 - If the task is large, suggest breaking it into smaller tasks
+- Be pragmatic. For simple, well-defined tasks, approve them without over-analysing
+- Don't block on trivial ambiguities like encoding, trailing newlines, or minor formatting details
+- If the intent is clear, approve it and note any minor assumptions in your summary
 
 Output format:
 If the task is READY for development, output:

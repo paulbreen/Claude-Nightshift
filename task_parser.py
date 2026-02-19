@@ -140,6 +140,17 @@ def _parse_body_sections(content: str) -> tuple[str, str, str]:
     Returns (task_description, context, acceptance_criteria).
     """
     sections = {"task": "", "context": "", "acceptance criteria": ""}
+    # Map common variations to canonical names
+    aliases = {
+        "task": "task",
+        "task description": "task",
+        "description": "task",
+        "requirements": "task",
+        "context": "context",
+        "background": "context",
+        "acceptance criteria": "acceptance criteria",
+        "criteria": "acceptance criteria",
+    }
     current_section = None
     current_lines = []
 
@@ -149,7 +160,8 @@ def _parse_body_sections(content: str) -> tuple[str, str, str]:
             # Save previous section
             if current_section and current_section in sections:
                 sections[current_section] = "\n".join(current_lines).strip()
-            current_section = stripped[3:].strip()
+            heading = stripped[3:].strip()
+            current_section = aliases.get(heading, heading)
             current_lines = []
         else:
             current_lines.append(line)
