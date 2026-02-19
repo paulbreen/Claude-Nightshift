@@ -9,6 +9,13 @@ echo "[$(date)] Pulling latest from git..."
 git fetch origin main
 git reset --hard origin/main
 
+# Ensure config.yaml exists (gitignored, user-specific)
+if [ ! -f config.yaml ]; then
+    echo "[$(date)] No config.yaml found, copying from example..."
+    cp config.yaml.example config.yaml
+    echo "[$(date)] WARNING: Edit config.yaml with your settings before running."
+fi
+
 echo "[$(date)] Building Docker image (will use cache if unchanged)..."
 docker compose build
 
