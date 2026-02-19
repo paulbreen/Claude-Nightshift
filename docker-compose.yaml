@@ -2,7 +2,7 @@ services:
   claude-worker:
     build: .
     container_name: claude-task-runner
-    restart: unless-stopped
+    restart: on-failure:3
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
